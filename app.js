@@ -2,7 +2,7 @@
    Plain HTML/JavaScript. Data is saved on the phone first, then synced to a Google Sheet. */
 'use strict';
 
-const APP_VERSION = '1.0.3';
+const APP_VERSION = '1.1.0';
 const LS_KEY = 'hockeyStats.v1';
 const QR_LIB = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
 
@@ -85,6 +85,7 @@ function gamesFor(pid, sid) {
   return db.games.filter(g => !g.deleted && !g.draft && g.playerId === pid && (!sid || g.seasonId === sid))
     .sort((a, b) => b.date.localeCompare(a.date) || (b.t0 || 0) - (a.t0 || 0));
 }
+const viewer = () => db.settings.role === 'view';
 const myLiveGame = () => db.games.find(g => !g.deleted && g.status === 'live' && g.deviceId === db.settings.deviceId);
 const playerName = id => (db.players.find(p => p.id === id) || {}).name || '';
 const seasonOf = id => db.seasons.find(s => s.id === id) || {};
@@ -256,14 +257,14 @@ function viewWelcome() {
       </div>`}
       <div class="card">
         <h3>${db.settings.url ? 'Add the first player' : 'Or start fresh'}</h3>
-        <div class="field"><label>Your name (shows as "Recorded by")</label><input id="w-me" value="${esc(db.settings.deviceName || 'Grandpa')}" autocomplete="off"></div>
-        <div class="field"><label>Player</label><input id="w-name" value="Colin" autocomplete="off"></div>
+        <div class="field"><label>Your name (shows as "Recorded by")</label><input id="w-me" value="${esc(db.settings.deviceName || '')}" placeholder="e.g. Grandpa" autocomplete="off"></div>
+        <div class="field"><label>Player's first name</label><input id="w-name" autocomplete="off"></div>
         <div class="two">
           <div class="field"><label>Season</label><input id="w-season" value="${seasonLabelFor()}"></div>
           <div class="field"><label>Jersey #</label><input id="w-jersey" inputmode="numeric"></div>
         </div>
-        <div class="field"><label>Team</label><input id="w-team" value="St. James Canucks"></div>
-        <div class="field"><label>Level</label><input id="w-level" value="U13 A2"></div>
+        <div class="field"><label>Team</label><input id="w-team" autocomplete="off"></div>
+        <div class="field"><label>Level</label><input id="w-level" placeholder="e.g. U13 A2" autocomplete="off"></div>
         <button class="btn" data-act="welcome">Start</button>
       </div>
     </div></div>`;
@@ -287,7 +288,7 @@ function viewHome() {
       ${others.map(g => `<div class="banner warn">${esc(g.recordedBy)} is tracking a live game for ${esc(playerName(g.playerId))} vs ${esc(g.opponent || 'opponent')}.</div>`).join('')}
       ${live
         ? `<button class="btn big go" data-act="resume">Resume game vs ${esc(live.opponent || 'opponent')}</button>`
-        : `<button class="btn big" data-act="newgame" ${s ? '' : 'disabled'}>Start new game</button>`}
+        : viewer() ? `<div class="banner info"><b>View only.</b> Stats update automatically while the app is open.</div>` : `<button class="btn big" data-act="newgame" ${s ? '' : 'disabled'}>Start new game</button>`}
       <div class="card">
         <h3>${esc(s ? s.label : '')} season</h3>
         <div class="tiles">
@@ -448,7 +449,7 @@ function viewFinish() {
 /* ---------- Game summary ---------- */
 function viewSummary() {
   const g = gameById(ui.params.id); if (!g) return viewGames();
-  const s = stats(g), se = seasonOf(g.seasonId), dups = duplicateIds();
+  const s = stats(g, g.status === 'live' ? Date.now() : 0), se = seasonOf(g.seasonId), dups = duplicateIds();
   const periods = Object.keys(s.toiP).map(Number).sort();
   const rows = [
     ['Goals', s.goal], ['Assists', s.ast], ['Points', s.pts], ['Plus / minus', signed(s.pm)],
@@ -475,7 +476,7 @@ function viewSummary() {
       <div class="card"><h3>Stats</h3><table class="stats">${rows.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join('')}</table></div>
       ${g.notes ? `<div class="card"><h3>Notes</h3><div>${esc(g.notes)}</div></div>` : ''}
       <button class="btn" data-act="share" data-id="${g.id}">Share summary</button>
-      <div class="btn-row"><button class="btn alt" data-act="edit" data-id="${g.id}">Edit</button><button class="btn danger" data-act="delgame" data-id="${g.id}">Delete</button></div>
+      ${viewer() ? '' : `<div class="btn-row"><button class="btn alt" data-act="edit" data-id="${g.id}">Edit</button><button class="btn danger" data-act="delgame" data-id="${g.id}">Delete</button></div>`}
     </div>${nav('games')}</div>`;
 }
 const RESULT_WORDS = { W: 'WIN', L: 'LOSS', OTL: 'OT LOSS', T: 'TIE' };
@@ -584,7 +585,7 @@ function viewEdit() {
       <div class="card"><h3>Stats</h3>
         ${steps.map(([k, label]) => `<div class="step"><span>${label}</span><div class="ctl"><button data-act="stepper" data-k="${k}" data-d="-1">−</button><b id="st-${k}">${s[k]}</b><button data-act="stepper" data-k="${k}" data-d="1">+</button></div></div>`).join('')}
         <div class="two" style="margin-top:12px">
-          <div class="field"><label>Time on ice (m:ss)</label><input id="e-toi" value="${fmtT(s.toi)}" inputmode="numeric"></div>
+          <div class="field"><label>Time on ice (m:ss)</label><input id="e-toi" value="${fmtT(s.toi)}" inputmode="numeric" pattern="[0-9]*" data-mask="mmss" autocomplete="off" placeholder="0:00"></div>
           <div class="field"><label>Shifts</label><input id="e-shifts" type="number" inputmode="numeric" value="${s.nShifts}"></div>
         </div>
       </div>
@@ -606,7 +607,7 @@ function viewGames() {
     <div class="wrap">
       ${s ? seasonPicker(p, s) : ''}
       <div class="list">${list.map(g => gameRow(g, dups)).join('') || '<div class="card muted">No games yet this season.</div>'}</div>
-      <button class="btn alt" data-act="pastgame" ${s ? '' : 'disabled'}>+ Add a past game by hand</button>
+      ${viewer() ? '' : `<button class="btn alt" data-act="pastgame" ${s ? '' : 'disabled'}>+ Add a past game by hand</button>`}
     </div>${nav('games')}</div>`;
 }
 
@@ -691,17 +692,32 @@ function viewStats() {
 }
 
 /* ---------- Settings ---------- */
+function viewSettingsViewer() {
+  return `<div class="page">${topbar('Settings')}
+    <div class="wrap">
+      <div class="card"><h3>View-only access</h3>
+        <p class="small" style="margin-top:0">This phone can see all the games and stats. It can't start, change or delete anything.</p>
+        ${syncLine()}
+        <button class="btn alt" style="margin-top:12px" data-act="syncnow">Refresh now</button>
+        ${db.settings.badKey ? `<div class="field" style="margin-top:12px"><label>Paste the new link</label><textarea id="s-link"></textarea></div>
+        <button class="btn" data-act="pastelink" data-src="s-link">Reconnect with link</button>` : ''}
+      </div>
+      <button class="btn danger" data-act="disconnect">Disconnect this phone</button>
+      <p class="small muted" style="text-align:center">Hockey Stats ${APP_VERSION}</p>
+    </div>${nav('settings')}</div>`;
+}
 function viewSettings() {
+  if (viewer()) return viewSettingsViewer();
   const st = db.settings, p = activePlayer();
   const connected = !!st.url;
   return `<div class="page">${topbar('Settings')}
     <div class="wrap">
       <div class="card"><h3>Players</h3>
         <div class="list">${players().map(x => `<div class="row" style="background:var(--bg)">
-          <label class="photo-row" style="cursor:pointer">${avatar(x, 48)}<input type="file" accept="image/*" class="hidden" data-change="photo" data-id="${x.id}"></label>
+          <label class="photo-row" style="cursor:pointer">${avatar(x, 48)}<input type="file" accept="image/*" class="vh" data-change="photo" data-id="${x.id}"></label>
           <div class="grow"><div class="title">${esc(x.name)}</div><div class="meta">${seasonsFor(x.id).map(s => esc(s.label + ' ' + (s.level || ''))).join(' · ') || 'No seasons'}</div></div>
           <button class="badge" style="border:0" data-act="editplayer" data-id="${x.id}">Edit</button></div>`).join('')}</div>
-        <p class="small muted">Tap a photo circle to add a picture.</p>
+        <p class="small muted">Tap a photo circle (or Edit → Change photo) to add a picture.</p>
         <button class="btn alt" data-act="addplayer">+ Add player (e.g. Cody)</button>
       </div>
 
@@ -718,7 +734,8 @@ function viewSettings() {
         ${connected ? `
           <div class="btn-row" style="margin-top:12px"><button class="btn alt" data-act="syncnow">Sync now</button><button class="btn alt" data-act="shareaccess">Share access</button></div>
           ${st.badKey ? `<div class="field" style="margin-top:12px"><label>Paste the new setup link</label><textarea id="s-link"></textarea></div>
-          <button class="btn" data-act="pastelink" data-src="s-link">Reconnect with link</button>` : `<button class="btn danger" style="margin-top:10px" data-act="rotate">Reset access (disconnect other phones)</button>`}
+          <button class="btn" data-act="pastelink" data-src="s-link">Reconnect with link</button>` : `<button class="btn danger" style="margin-top:10px" data-act="rotate">Reset access (disconnect other phones)</button>
+          <button class="btn alt" style="margin-top:8px" data-act="rotateview">Reset view-only access</button>`}
           <details style="margin-top:12px"><summary class="small muted">Connection details</summary>
             <div class="field" style="margin-top:10px"><label>Web App URL</label><input id="s-url" value="${esc(st.url)}"></div>
             <div class="field"><label>Access key</label><input id="s-key" value="${esc(st.key)}"></div>
@@ -736,7 +753,7 @@ function viewSettings() {
       <div class="card"><h3>Backup</h3>
         <p class="small muted" style="margin-top:0">Extra safety copy of everything on this phone.</p>
         <div class="btn-row"><button class="btn alt" data-act="export">Save backup file</button>
-        <label class="btn alt" style="cursor:pointer">Restore backup<input type="file" accept="application/json,.json" class="hidden" data-change="import"></label></div>
+        <label class="btn alt" style="cursor:pointer">Restore backup<input type="file" accept="application/json,.json" class="vh" data-change="import"></label></div>
       </div>
       <p class="small muted" style="text-align:center">Hockey Stats ${APP_VERSION}</p>
     </div>${nav('settings')}</div>`;
@@ -750,7 +767,8 @@ function viewConnect() {
   return `<div class="page" style="padding-bottom:24px">
     <div class="hero"><h1>Hockey Stats</h1><div class="sub">Connect this phone to the team stats sheet</div></div>
     <div class="wrap"><div class="card">
-      <div class="field"><label>Your name (shows as "Recorded by")</label><input id="c-name" value="${esc(c.n || '')}" autocomplete="off"></div>
+      ${c.r === 'v' ? `<p style="margin-top:0"><b>View-only access${c.n ? ' for ' + esc(c.n) : ''}.</b> This phone will be able to see all the games and stats, but not change them.</p>
+      <input id="c-name" type="hidden" value="${esc(c.n || '')}">` : `<div class="field"><label>Your name (shows as "Recorded by")</label><input id="c-name" value="${esc(c.n || '')}" autocomplete="off"></div>`}
       <button class="btn big" data-act="doconnect">Connect</button>
       <button class="btn alt" style="margin-top:10px" data-act="cancelconnect">Cancel</button>
     </div>
@@ -770,9 +788,10 @@ function parseConnectLink(text) {
     return o;
   } catch (e) { return null; }
 }
-function makeConnectLink(name) {
+function makeConnectLink(name, key, role) {
   const m = db.settings.url.match(/\/s\/([^/]+)\/exec/);
-  const payload = { s: m ? m[1] : db.settings.url, k: db.settings.key, n: name };
+  const payload = { s: m ? m[1] : db.settings.url, k: key || db.settings.key, n: name };
+  if (role === 'view') payload.r = 'v';
   return location.origin + location.pathname + '#connect=' + b64urlEncode(JSON.stringify(payload));
 }
 function checkHashConnect() {
@@ -810,7 +829,8 @@ const A = {
   player: d => { db.settings.activePlayerId = d.id; ui.seasonId = null; saveDb(); render(); },
 
   welcome() {
-    const name = $('#w-name').value.trim() || 'Player';
+    const name = $('#w-name').value.trim();
+    if (!name) return alert("Enter the player's first name.");
     db.settings.deviceName = $('#w-me').value.trim() || 'Me';
     const p = { id: uid(), name };
     db.players.push(p); touch('players', p);
@@ -997,6 +1017,7 @@ const A = {
       const want = Number($('#st-' + k).textContent) || 0;
       if (want !== raw[k]) g.adj[k] = want - raw[k];
     }
+    maskMMSS($('#e-toi'), true);
     const toi = parseT($('#e-toi').value);
     g.toiOverride = toi != null && fmtT(toi) !== fmtT(raw.toi) ? toi : null;
     const sh = $('#e-shifts').value;
@@ -1016,7 +1037,7 @@ const A = {
   },
 
   addplayer() {
-    formSheet('Add player', [{ k: 'name', label: 'Name', v: '' }, { k: 'label', label: 'Season', v: seasonLabelFor() }, { k: 'team', label: 'Team', v: 'St. James Canucks' }, { k: 'level', label: 'Level', v: '' }, { k: 'jersey', label: 'Jersey #', v: '', num: true }], v => {
+    formSheet('Add player', [{ k: 'name', label: 'Name', v: '' }, { k: 'label', label: 'Season', v: seasonLabelFor() }, { k: 'team', label: 'Team', v: (curSeason(activePlayer()) || {}).team || '' }, { k: 'level', label: 'Level', v: '' }, { k: 'jersey', label: 'Jersey #', v: '', num: true }], v => {
       if (!v.name) return;
       const p = { id: uid(), name: v.name }; db.players.push(p); touch('players', p);
       const s = { id: uid(), playerId: p.id, label: v.label || seasonLabelFor(), team: v.team, level: v.level, jersey: v.jersey };
@@ -1028,7 +1049,13 @@ const A = {
     const p = db.players.find(x => x.id === d.id);
     formSheet('Edit player', [{ k: 'name', label: 'Name', v: p.name }], v => {
       if (v.name) p.name = v.name; touch('players', p); closeSheet(); render();
-    }, `<button class="btn danger" data-act="delplayer" data-id="${p.id}">Remove player</button>`);
+    }, `<div class="photo-row">${avatar(p, 56)}<label class="btn line" style="cursor:pointer;flex:1">${p.photo ? 'Change photo' : 'Add photo'}<input type="file" accept="image/*" class="vh" data-change="photo" data-id="${p.id}"></label></div>
+      ${p.photo ? `<button class="btn alt" data-act="delphoto" data-id="${p.id}">Remove photo</button>` : ''}
+      <button class="btn danger" data-act="delplayer" data-id="${p.id}">Remove player</button>`);
+  },
+  delphoto(d) {
+    const p = db.players.find(x => x.id === d.id);
+    delete p.photo; touch('players', p); closeSheet(); render();
   },
   delplayer(d) {
     const p = db.players.find(x => x.id === d.id);
@@ -1070,8 +1097,8 @@ const A = {
   async doconnect() {
     const c = pendingConnect; if (!c) return go('home');
     const name = $('#c-name').value.trim() || c.n || 'Me';
-    const old = { url: db.settings.url, key: db.settings.key, deviceName: db.settings.deviceName };
-    Object.assign(db.settings, { url: c.url, key: c.k, deviceName: name, lastSyncError: null });
+    const old = { url: db.settings.url, key: db.settings.key, deviceName: db.settings.deviceName, role: db.settings.role };
+    Object.assign(db.settings, { url: c.url, key: c.k, deviceName: name, lastSyncError: null, role: c.r === 'v' ? 'view' : 'edit' });
     try {
       await api({ action: 'ping' });
       saveDb();
@@ -1096,16 +1123,22 @@ const A = {
     openSheet(`<h3>Share access</h3>
       <p class="small muted" style="margin:0">Creates a QR code that connects another phone to this sheet.</p>
       <div class="field"><label>Who is it for?</label><input id="sa-name" value="Kyla" autocomplete="off"></div>
+      <div class="field"><label>What can they do?</label><div class="seg" data-seg="sa-role"><button type="button" class="on" data-act="seg" data-v="edit">Track games</button><button type="button" data-act="seg" data-v="view">View only</button></div></div>
       <button class="btn" data-act="makeqr">Make QR code</button>
       <div id="sa-out"></div>
       <button class="btn alt" data-act="close">Close</button>`);
   },
   async makeqr() {
     const name = $('#sa-name').value.trim() || 'Guest';
-    const link = makeConnectLink(name);
+    const role = segVal('sa-role') === 'view' ? 'view' : 'edit';
+    let link;
+    if (role === 'view') {
+      try { link = makeConnectLink(name, (await api({ action: 'viewkey' })).key, 'view'); }
+      catch (e) { return alert("Couldn't get a view-only link: " + e.message + (/Unknown request/.test(e.message) ? ' — update Code.gs in the Google Sheet first.' : '')); }
+    } else link = makeConnectLink(name);
     const out = $('#sa-out');
     out.innerHTML = `<div class="qr-box"><div id="qr"></div></div>
-      <p class="small" style="margin:8px 0">${esc(name)}: open the iPhone <b>Camera</b>, point it at this code and tap the link. Then in Safari tap <b>Share → Add to Home Screen</b>.</p>
+      <p class="small" style="margin:8px 0">${role === 'view' ? '<b>View only.</b> ' : ''}${esc(name)}: open the iPhone <b>Camera</b>, point it at this code and tap the link. Then in Safari tap <b>Share → Add to Home Screen</b>.</p>
       <button class="btn line" data-act="sendlink">Text the link instead</button>`;
     A.sendlink.link = link;
     try {
@@ -1130,6 +1163,11 @@ const A = {
       render();
     } catch (e) { alert('Could not reset: ' + e.message); }
   },
+  async rotateview() {
+    if (!confirm('Reset view-only access? Every view-only phone stops updating until you share a new view-only link. Kyla is not affected.')) return;
+    try { await api({ action: 'rotate', which: 'view' }); alert('Done. View-only phones are disconnected.'); }
+    catch (e) { alert('Could not reset: ' + e.message + (/Unknown request|view-only/.test(e.message) ? '' : '')); }
+  },
   export() {
     const blob = new Blob([JSON.stringify(db, null, 1)], { type: 'application/json' });
     const a = document.createElement('a');
@@ -1147,15 +1185,19 @@ const CHANGE = {
   photo: el => {
     const file = el.files && el.files[0]; if (!file) return;
     const p = db.players.find(x => x.id === el.dataset.id);
+    el.value = '';
     const img = new Image();
+    img.onerror = () => alert("That photo couldn't be read. Try a different one, or take a screenshot of it and use that.");
     img.onload = () => {
-      const size = 240, cv = document.createElement('canvas'); cv.width = cv.height = size;
+      const size = 200, cv = document.createElement('canvas'); cv.width = cv.height = size;
       const s = Math.min(img.width, img.height);
       cv.getContext('2d').drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
-      p.photo = cv.toDataURL('image/jpeg', 0.75); touch('players', p); render();
-      URL.revokeObjectURL(img.src);
+      p.photo = cv.toDataURL('image/jpeg', 0.7); touch('players', p); closeSheet(); render();
     };
-    img.src = URL.createObjectURL(file);
+    const fr = new FileReader();
+    fr.onload = () => { img.src = fr.result; };
+    fr.onerror = img.onerror;
+    fr.readAsDataURL(file);
   },
   import: el => {
     const file = el.files && el.files[0]; if (!file) return;
@@ -1174,6 +1216,18 @@ document.addEventListener('click', e => {
   const fn = A[el.dataset.act];
   if (fn) { e.preventDefault(); fn(el.dataset, el); }
 });
+// m:ss boxes: type digits only, the colon is added automatically (1630 -> 16:30).
+function maskMMSS(el, final) {
+  let d = el.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, 4);
+  if (!d) { el.value = ''; return; }
+  if (!final) { el.value = d.length <= 2 ? d : d.slice(0, -2) + ':' + d.slice(-2); return; }
+  if (d.length <= 2) d = '0' + d.padStart(2, '0');           // 45 -> 0:45
+  let m = Number(d.slice(0, -2)), s = Number(d.slice(-2));
+  m += Math.floor(s / 60); s %= 60;                             // 9:75 -> 10:15
+  el.value = m + ':' + String(s).padStart(2, '0');
+}
+document.addEventListener('input', e => { if (e.target.dataset && e.target.dataset.mask === 'mmss') maskMMSS(e.target, false); });
+document.addEventListener('focusout', e => { if (e.target.dataset && e.target.dataset.mask === 'mmss') maskMMSS(e.target, true); });
 document.addEventListener('change', e => {
   const el = e.target.closest('[data-change]');
   if (el && CHANGE[el.dataset.change]) CHANGE[el.dataset.change](el);
@@ -1249,7 +1303,7 @@ async function syncNow(manual) {
     out[kind].push(kind === 'games' ? { rec, summary: summaryRow(rec) } : { rec });
   }
   try {
-    const j = await api({ action: 'sync', device: db.settings.deviceName, ...out });
+    const j = viewer() ? await api({ action: 'pull' }) : await api({ action: 'sync', device: db.settings.deviceName, ...out });
     const changed = merge(j.data || {});
     for (const k of keys) {
       const [kind, id] = k.split(':');
@@ -1291,6 +1345,15 @@ document.addEventListener('visibilitychange', () => {
 
 /* ============================== Start ============================== */
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+// View-only phones: block anything that changes data, and refresh every 30 seconds while open.
+['welcome', 'newgame', 'resume', 'startgame', 'pastgame', 'edit', 'saveedit', 'delgame', 'addplayer', 'editplayer', 'delplayer', 'delphoto',
+ 'addseason', 'editseason', 'shareaccess', 'makeqr', 'rotate', 'rotateview'].forEach(k => {
+  const f = A[k];
+  if (f) A[k] = function (...args) { if (viewer()) return alert('This phone has view-only access.'); return f.apply(this, args); };
+});
+const _photo = CHANGE.photo;
+CHANGE.photo = el => (viewer() ? alert('This phone has view-only access.') : _photo(el));
+setInterval(() => { if (viewer() && document.visibilityState === 'visible') syncNow(); }, 30000);
 window.addEventListener('hashchange', () => { if (checkHashConnect()) render(); });
 checkHashConnect();
 if (ui.view !== 'connect' && myLiveGame()) ui.view = 'game';
