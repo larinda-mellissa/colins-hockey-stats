@@ -2,7 +2,7 @@
    Plain HTML/JavaScript. Data is saved on the phone first, then synced to a Google Sheet. */
 'use strict';
 
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.0.3';
 const LS_KEY = 'hockeyStats.v1';
 const QR_LIB = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
 
@@ -248,15 +248,15 @@ function viewWelcome() {
   return `<div class="page" style="padding-bottom:24px">
     <div class="hero"><h1>Hockey Stats</h1><div class="sub">Let's set up this phone.</div></div>
     <div class="wrap">
-      <div class="card">
+      ${db.settings.url ? `<div class="banner info"><b>✓ Connected to the Google Sheet.</b> The sheet has no players yet, so add the first one below and tap Start.</div>` : `<div class="card">
         <h3>Got a setup link?</h3>
         <p class="small muted" style="margin-top:0">If someone shared access with you (QR code or text message), paste the link here.</p>
         <div class="field"><textarea id="w-link" placeholder="https://…#connect=…"></textarea></div>
         <button class="btn line" data-act="pastelink" data-src="w-link">Connect with link</button>
-      </div>
+      </div>`}
       <div class="card">
-        <h3>Or start fresh</h3>
-        <div class="field"><label>Your name (shows as "Recorded by")</label><input id="w-me" value="Grandpa" autocomplete="off"></div>
+        <h3>${db.settings.url ? 'Add the first player' : 'Or start fresh'}</h3>
+        <div class="field"><label>Your name (shows as "Recorded by")</label><input id="w-me" value="${esc(db.settings.deviceName || 'Grandpa')}" autocomplete="off"></div>
         <div class="field"><label>Player</label><input id="w-name" value="Colin" autocomplete="off"></div>
         <div class="two">
           <div class="field"><label>Season</label><input id="w-season" value="${seasonLabelFor()}"></div>
@@ -478,18 +478,85 @@ function viewSummary() {
       <div class="btn-row"><button class="btn alt" data-act="edit" data-id="${g.id}">Edit</button><button class="btn danger" data-act="delgame" data-id="${g.id}">Delete</button></div>
     </div>${nav('games')}</div>`;
 }
+const RESULT_WORDS = { W: 'WIN', L: 'LOSS', OTL: 'OT LOSS', T: 'TIE' };
+const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + 's')}`;
 function shareText(g) {
-  const s = stats(g), se = seasonOf(g.seasonId);
-  const lines = [
-    `🏒 ${playerName(g.playerId)} — ${se.team || 'Team'} ${g.homeAway === 'Away' ? '@' : 'vs'} ${g.opponent || 'Opponent'}`,
-    `${fmtDate(g.date)}${g.score ? ` · Final ${scoreText(g)} ${resultLabel(g)}` : ''}`,
-    `G ${s.goal} · A ${s.ast} · PTS ${s.pts} · +/- ${signed(s.pm)}`,
-    `TOI ${fmtT(s.toi)} · ${s.nShifts} shifts · avg ${fmtT(s.avgShift)}`,
-    `Hits ${s.hit} · Shot att ${s.shot} · Rushes ${s.rush} · Blocks ${s.blk} · PIM ${s.pim}`
-  ];
-  if (s.soAtt) lines.push(`Shootout: ${s.soGoals} for ${s.soAtt}`);
-  if (g.notes) lines.push(g.notes);
+  const s = stats(g), se = seasonOf(g.seasonId), name = playerName(g.playerId);
+  const team = se.team || 'Us', opp = g.opponent || 'Opponent';
+  const r = result(g);
+  const so = g.so && g.so.res && g.score && g.score.us === g.score.them ? ' (shootout)' : g.hadOT && r ? ' (OT)' : '';
+  const lines = [`🏒 ${name}'s game recap`];
+  if (g.score) lines.push(`${team} ${g.score.us}, ${opp} ${g.score.them}${r ? ` — ${RESULT_WORDS[r]}${so}` : ''}`);
+  else lines.push(`${team} ${g.homeAway === 'Away' ? 'at' : 'vs'} ${opp}`);
+  lines.push(`${fmtDate(g.date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${g.homeAway === 'Away' ? 'Away' : 'Home'}`, '');
+  lines.push(s.pts ? `⭐ ${plural(s.goal, 'goal')}, ${plural(s.ast, 'assist')} (${plural(s.pts, 'point')})` : '⭐ No points this game');
+  lines.push(`➕ Plus/minus: ${signed(s.pm)}`);
+  lines.push(`⏱️ Ice time: ${fmtT(s.toi)} over ${plural(s.nShifts, 'shift')}${s.nShifts ? ` (avg ${fmtT(s.avgShift)})` : ''}`);
+  lines.push(`💥 ${plural(s.hit, 'hit')} · 🛡️ ${plural(s.blk, 'blocked shot')}`);
+  lines.push(`🎯 ${plural(s.shot, 'shot attempt')} · 🚀 ${plural(s.rush, 'rush', 'rushes')}`);
+  if (s.pim) lines.push(`⛔ ${plural(s.pim, 'penalty minute')}`);
+  if (s.soAtt) lines.push(`🥅 Shootout: ${s.soGoals} for ${s.soAtt}`);
+  if (g.notes) lines.push('', `📝 ${g.notes}`);
   return lines.join('\n');
+}
+
+// A score-graphic picture of the game, sized for a phone screen.
+function drawShareCard(g) {
+  const s = stats(g), se = seasonOf(g.seasonId), name = playerName(g.playerId);
+  const W = 1080, H = 1350, cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const x = cv.getContext('2d');
+  const F = (w, px) => `${w} ${px}px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
+  const BLUE = '#0b3f91', BLUE2 = '#1a5cc8', SOFT = '#e6eefb', INK = '#0f1b33', MUTED = '#5b6780';
+  const fit = (text, weight, px, maxW) => { let size = px; do { x.font = F(weight, size); size -= 2; } while (x.measureText(text).width > maxW && size > 20); return x.font; };
+  const rr = (X, Y, w, h, r, fill) => { x.beginPath(); x.roundRect(X, Y, w, h, r); x.fillStyle = fill; x.fill(); };
+
+  x.fillStyle = '#ffffff'; x.fillRect(0, 0, W, H);
+  // Header band
+  x.fillStyle = BLUE; x.fillRect(0, 0, W, 340);
+  x.fillStyle = BLUE2; x.fillRect(0, 324, W, 16);
+  x.textAlign = 'left'; x.fillStyle = '#c9d6ee';
+  x.font = F(700, 34); x.fillText('GAME RECAP', 70, 100);
+  x.fillStyle = '#ffffff'; x.font = fit(name.toUpperCase(), 900, 96, W - 140); x.fillText(name.toUpperCase(), 70, 196);
+  x.fillStyle = '#c9d6ee'; x.font = F(600, 34);
+  const sub = [se.team, se.level, se.jersey ? '#' + se.jersey : ''].filter(Boolean).join(' · ');
+  x.fillText(sub, 70, 250);
+  x.fillText(`${fmtDate(g.date, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })} · ${g.homeAway === 'Away' ? 'Away' : 'Home'}`, 70, 300);
+  // Score
+  const r = result(g);
+  if (g.score) {
+    x.textAlign = 'center';
+    x.fillStyle = INK; x.font = F(900, 110);
+    x.fillText(`${g.score.us} – ${g.score.them}`, W / 2, 470);
+  }
+  // Result line
+  x.textAlign = 'center';
+  x.fillStyle = INK; x.font = fit(`${se.team || 'Us'} vs ${g.opponent || 'Opponent'}`, 700, 40, W - 140);
+  x.fillText(`${se.team || 'Us'} ${g.homeAway === 'Away' ? 'at' : 'vs'} ${g.opponent || 'Opponent'}`, W / 2, g.score ? 530 : 470);
+  if (r) {
+    const word = RESULT_WORDS[r] + (g.so && g.so.res && g.score && g.score.us === g.score.them ? ' · SHOOTOUT' : g.hadOT ? ' · OT' : '');
+    x.font = F(800, 34); const pw = x.measureText(word).width + 64;
+    rr(W / 2 - pw / 2, 556, pw, 62, 31, r === 'W' ? '#dcf3e3' : r === 'T' ? SOFT : '#fde8e6');
+    x.fillStyle = r === 'W' ? '#15803d' : r === 'T' ? BLUE : '#c2271d'; x.fillText(word, W / 2, 599);
+  }
+  // Stat tiles
+  const tiles = [
+    [s.goal, 'GOALS'], [s.ast, 'ASSISTS'], [signed(s.pm), 'PLUS / MINUS'],
+    [fmtT(s.toi), 'ICE TIME'], [s.hit, 'HITS'], [s.blk, 'BLOCKED SHOTS'],
+    [s.shot, 'SHOT ATTEMPTS'], [s.rush, 'RUSHES'], [s.nShifts, 'SHIFTS']
+  ];
+  const gx = 60, gy = 650, gap = 22, tw = (W - gx * 2 - gap * 2) / 3, th = 172;
+  tiles.forEach(([val, label], i) => {
+    const cx = gx + (i % 3) * (tw + gap), cy = gy + Math.floor(i / 3) * (th + gap);
+    rr(cx, cy, tw, th, 28, SOFT);
+    x.fillStyle = BLUE; x.font = F(900, 74); x.fillText(String(val), cx + tw / 2, cy + 96);
+    x.fillStyle = MUTED; x.font = F(700, 26); x.fillText(label, cx + tw / 2, cy + 142);
+  });
+  // Footer
+  const extra = [s.pim ? `${s.pim} penalty min` : '', s.nShifts ? `avg shift ${fmtT(s.avgShift)}` : '', s.soAtt ? `shootout ${s.soGoals} for ${s.soAtt}` : ''].filter(Boolean).join('  ·  ');
+  x.fillStyle = MUTED; x.font = F(600, 30);
+  if (extra) x.fillText(extra, W / 2, 1305);
+  return new Promise(res => cv.toBlob(res, 'image/png'));
 }
 
 /* ---------- Edit game (after-game fixes, or a game entered by hand) ---------- */
@@ -866,10 +933,33 @@ const A = {
   },
 
   summary: d => go('summary', { id: d.id }),
-  share(d) {
-    const text = shareText(gameById(d.id));
-    if (navigator.share) navigator.share({ text }).catch(() => {});
-    else if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => alert('Summary copied — paste it into a text.'));
+  async share(d) {
+    const g = gameById(d.id), text = shareText(g);
+    let file = null;
+    try {
+      const blob = await drawShareCard(g);
+      const nm = `${playerName(g.playerId)}-${g.date}-vs-${(g.opponent || 'game').replace(/[^a-z0-9]+/gi, '-')}.png`;
+      file = new File([blob], nm, { type: 'image/png' });
+    } catch (e) { /* drawing not supported: text only */ }
+    if (navigator.share) {
+      try {
+        if (file && navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], text });
+        else await navigator.share({ text });
+        return;
+      } catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    // No share sheet (e.g. a computer): show the card and the text to copy.
+    const url = file ? URL.createObjectURL(file) : '';
+    openSheet(`<h3>Game recap</h3>
+      ${url ? `<img src="${url}" alt="Game recap picture" style="width:100%;border-radius:14px;border:1px solid var(--line)">` : ''}
+      <pre id="sh-text" style="white-space:pre-wrap;font:15px/1.45 inherit;background:var(--bg);padding:12px;border-radius:12px;margin:0">${esc(text)}</pre>
+      <button class="btn" data-act="copyrecap">Copy text</button>
+      <button class="btn alt" data-act="close">Close</button>`);
+    A.copyrecap.text = text;
+  },
+  copyrecap() {
+    const t = A.copyrecap.text;
+    if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => alert('Copied — paste it into a text.')).catch(() => alert('Press and hold the text to copy it.'));
   },
   edit: d => go('edit', { id: d.id }),
   pastgame() {
