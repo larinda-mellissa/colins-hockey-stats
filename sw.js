@@ -1,6 +1,6 @@
 // Offline support: the app works in rinks with no signal.
 // Bump CACHE when you change any app file so phones pick up the new version.
-const CACHE = 'hockey-stats-v1.0.0';
+const CACHE = 'hockey-stats-v1.0.1';
 const ASSETS = [
   './',
   './index.html',

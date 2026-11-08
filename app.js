@@ -2,7 +2,7 @@
    Plain HTML/JavaScript. Data is saved on the phone first, then synced to a Google Sheet. */
 'use strict';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 const LS_KEY = 'hockeyStats.v1';
 const QR_LIB = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
 
@@ -691,7 +691,10 @@ function viewConnect() {
     </div></div>`;
 }
 function parseConnectLink(text) {
-  const m = String(text || '').match(/#connect=([A-Za-z0-9_\-]+)/);
+  // Email scanners (like Outlook Safe Links) wrap the link and percent-encode it, so decode before looking.
+  let str = String(text || '').trim();
+  for (let i = 0; i < 3; i++) { try { const d = decodeURIComponent(str); if (d === str) break; str = d; } catch (e) { break; } }
+  const m = str.match(/#connect=([A-Za-z0-9_\-]+)/);
   if (!m) return null;
   try {
     const o = JSON.parse(b64urlDecode(m[1]));
